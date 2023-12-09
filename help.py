@@ -44,8 +44,10 @@ def query_mongo_atlas(query):
     client = MongoClient(
         "mongodb+srv://walterlul:milonga123@gedi-cluster.nxt2obp.mongodb.net/?retryWrites=true&w=majority")
     db = client.test
-    collection = db["nodes"]
-    results = list(collection.find(query))
+    collection = db["nodes"]  # Siempre busca en la colección 'nodes'
+    results = list(collection.find({"name": query})) 
+    if not results:
+        return "No se encontraron resultados"
     first_element = results[0]
     document_name = first_element['path']
 
@@ -65,18 +67,25 @@ def query_mongo_atlas(query):
             f"https://dvcm270k-4000.brs.devtunnels.ms{document_name}")
         documents = loader.load()
         chunk = split_text(documents)
-        save_to_chroma(chunk)
-        embedding_function = OpenAIEmbeddings()
+        db = Chroma.from_documents(
+        chunk, OpenAIEmbeddings(), persist_directory=CHROMA_PATH
+        )
+        db.persist()
+        # print(documents)
+        # embedding_function = OpenAIEmbeddings()
 
-        dbc = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
+        # dbc = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
         # Convert the query to a string if it's not already
         if not isinstance(query, str):
             query = str(query)
-
         # Use the query in the similarity_search function
-        doc = dbc.similarity_search(query)
+        doc = db.similarity_search(query)
+        print(doc)
+        print("llego")
         result = doc[0].page_content
-        return result
+        print("llego aqui")
+
+        return doc[0]
     else:
         return "Unsupported file type"
 
@@ -100,24 +109,18 @@ def query_mongo_atlas(query):
 # Update the Pydantic model to only include the query
 class MongoQueryInput(BaseModel):
     """Input for the MongoDB query."""
-    query: dict = Field(
-        description="The query to execute on the 'nodes' collection")
+    name: str = Field(description="The name of the document to find in the 'nodes' collection")
 
-
-# Update the MongoDBQueryTool to match the new function signature
 class MongoDBQueryTool(BaseTool):
     name = "query_mongo_atlas"
-    description = "Performs queries to the 'nodes' collection in MongoDB Atlas."
+    description = "Finds a document in the 'nodes' collection in MongoDB Atlas."
     args_schema: Type[BaseModel] = MongoQueryInput
 
-    def _run(self, query: dict):
-        # As collection name is now hardcoded in the function, it's no longer needed as a parameter
-        return query_mongo_atlas(query)
+    def _run(self, name: str):
+        return query_mongo_atlas(name)
 
-    def _arun(self, query: dict):
+    def _arun(self, name: str):
         raise NotImplementedError("Asynchronous execution not supported")
-
-
 llm = ChatOpenAI(model="gpt-3.5-turbo-0613", temperature=0)
 # db = Chroma(persist_directory=CHROMA_PATH,
 #                     embedding_function=embedding_function)

@@ -1,137 +1,151 @@
-from pymongo import MongoClient
-from datetime import datetime, timedelta
-import yfinance as yf
-from langchain.agents import AgentType, initialize_agent
-from langchain.chat_models import ChatOpenAI
-from typing import Type
-from langchain.agents.agent_toolkits import create_retriever_tool
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import logging
+from help import MongoDBQueryTool
+# Importa aquí tus otros módulos y funciones necesarias
 from langchain.vectorstores.chroma import Chroma
 from langchain.embeddings import OpenAIEmbeddings
-from langchain.agents import initialize_agent
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from langchain.chat_models import ChatOpenAI
+from langchain.llms.openai import OpenAI
+from langchain.agents.agent_toolkits import create_retriever_tool
 from dotenv import load_dotenv
-from pymongo import MongoClient
-from bson.regex import Regex
-import pandas as pd
-import io
-from langchain.document_loaders import PyPDFLoader
-import requests
-from fastapi import FastAPI
-from typing import Any
-from fastapi.middleware.cors import CORSMiddleware
-from create_database import generate_data_store, load_documents, save_to_chroma, split_text
+from langchain_experimental.tools import PythonREPLTool
+from langchain_experimental.agents.agent_toolkits import create_python_agent
+from langchain.agents.agent_types import AgentType
+from langchain.agents import Tool
+
+# from langchain.agents import initialize_agent
+from langchain.agents import create_sql_agent
+from langchain.agents.agent_toolkits import SQLDatabaseToolkit
+from langchain.sql_database import SQLDatabase
+from langchain.agents.openai_functions_agent.agent_token_buffer_memory import (
+    AgentTokenBufferMemory,
+)
+from langchain.agents import AgentExecutor
+from langchain.agents.openai_functions_agent.base import OpenAIFunctionsAgent
+from langchain.prompts import MessagesPlaceholder
+from langchain.schema.messages import SystemMessage
+from langchain.agents.agent_toolkits import create_conversational_retrieval_agent
 
 load_dotenv()
-app = FastAPI()
+
+# * Retriever Tool Logic
+embedding_function = OpenAIEmbeddings()
+
 CHROMA_PATH = "chroma"
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Permite todas las origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Permite todos los métodos
-    allow_headers=["*"],  # Permite todos los headers
-)
-
-
-class Query(BaseModel):
-    query: str
-
-
-def query_mongo_atlas(query):
-    """Consulta MongoDB Atlas y devuelve resultados."""
-    client = MongoClient(
-        "mongodb+srv://walterlul:milonga123@gedi-cluster.nxt2obp.mongodb.net/?retryWrites=true&w=majority")
-    db = client.test
-    collection = db["nodes"]
-    results = list(collection.find(query))
-    first_element = results[0]
-    document_name = first_element['path']
-
-    # Handle different file types
-    file = requests.get(
-        f"https://dvcm270k-4000.brs.devtunnels.ms{document_name}")
-
-    if document_name.endswith('.csv'):
-        data = file.content.decode('utf-8')
-        df = pd.read_csv(io.StringIO(data))
-        return df
-    elif document_name.endswith('.pdf'):
-        print("es un archivo csv")
-        print(document_name)
-        loader = PyPDFLoader(
-            f"https://ppmk6krd-4000.brs.devtunnels.ms{document_name}")
-        documents = loader.load()
-        chunk = split_text(documents)
-        print(chunk)
-        save_to_chroma(chunk)
-        
-     
-        # Handle pdf file
-        # This will depend on what you want to do with the pdf files
-        pass
-    else:
-        return "Unsupported file type"
-
-
-# ejemplo
-# nombre_documento = "FUNDAMENTOS seguridad"
-# consulta_regex = Regex(f".*{nombre_documento}.*", 'i')
-# resultado = query_mongo_atlas({"name": consulta_regex})
-
-# print(type(resultado))
-
-# # print(resultado)
-# first_element = resultado[0] # This is a dictionary
-
-# document_id = first_element['id']  # Access the 'id' from the dictionary
-# document_name = first_element['path']  # Access the 'name' from the dictionary
-
-# print(document_name)
-
-# Update the Pydantic model to only include the query
-class MongoQueryInput(BaseModel):
-    """Input for the MongoDB query."""
-    query: dict = Field(
-        description="The query to execute on the 'nodes' collection")
-
-
-# Update the MongoDBQueryTool to match the new function signature
-class MongoDBQueryTool(BaseTool):
-    name = "query_mongo_atlas"
-    description = "Performs queries to the 'nodes' collection in MongoDB Atlas."
-    args_schema: Type[BaseModel] = MongoQueryInput
-
-    def _run(self, query: dict):
-        # As collection name is now hardcoded in the function, it's no longer needed as a parameter
-        return query_mongo_atlas(query)
-
-    def _arun(self, query: dict):
-        raise NotImplementedError("Asynchronous execution not supported")
-
-
-llm = ChatOpenAI(model="gpt-3.5-turbo-0613", temperature=0)
-embedding_function = OpenAIEmbeddings()
-db = Chroma(persist_directory=CHROMA_PATH,
-                    embedding_function=embedding_function)
+db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
 
 retriever = db.as_retriever()
 
-retriever_tool = create_retriever_tool(
-            retriever,
-            "Responder_Preguntas",
-            "Para responder preguntas sobre el pdf",
-        )
+tool_retriever = create_retriever_tool(
+    retriever,
+    "search_documents",
+    "Searches and returns documents.",
+)
+llm = OpenAI(temperature=0)
 
-tools = [MongoDBQueryTool()]
-tools.append(retriever_tool)
+# * Python Tool
+python_repl = create_python_agent(
+    llm=llm,
+    tool=PythonREPLTool(),
+    verbose=True,
+    agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+)
 
-agent = initialize_agent(
-    tools, llm, agent=AgentType.OPENAI_FUNCTIONS, verbose=True)
+# * SQL Tool
+db = SQLDatabase.from_uri("sqlite:///Chinook_Sqlite.sqlite")
+toolkit = SQLDatabaseToolkit(db=db, llm=llm)
+
+sql_agent = create_sql_agent(
+    llm=ChatOpenAI(temperature=0),
+    toolkit=toolkit,
+    verbose=True,
+    agent_type=AgentType.OPENAI_FUNCTIONS,
+)
+
+# * All Tools
+tools = [
+    Tool(
+        name="Python_RELP",
+        func=python_repl.run,
+        description="useful for when you need to use python to answer a question. You should input python code",
+    ),
+        Tool(
+        name="Sql_Agent",
+        func=sql_agent.run,
+        description="Util para consultar datos en la base de datos",
+    ),
+]
+
+# * Retriever Tool Add
+tools.append(MongoDBQueryTool())
+tools.append(tool_retriever)
+
+llm = ChatOpenAI(temperature=0)
+
+agent_executor = create_conversational_retrieval_agent(llm, tools, verbose=True)
+
+# ! This is needed for both the memory and the prompt
+memory_key = "history"
+
+memory = AgentTokenBufferMemory(memory_key=memory_key, llm=llm)
+
+system_message = SystemMessage(
+    content=(
+        "Do your best to answer the questions. "
+        "Feel free to use any tools available to look up "
+        "relevant information, only if necessary"
+    )
+)
+
+prompt = OpenAIFunctionsAgent.create_prompt(
+    system_message=system_message,
+    extra_prompt_messages=[MessagesPlaceholder(variable_name=memory_key)],
+)
+
+agent = OpenAIFunctionsAgent(llm=llm, tools=tools, prompt=prompt)
+
+agent_executor = AgentExecutor(
+    agent=agent,
+    tools=tools,
+    memory=memory,
+    verbose=True,
+    return_intermediate_steps=True,
+    handle_parsing_errors=True
+)
+
+
+# Modelo Pydantic para la entrada de datos
+class QueryData(BaseModel):
+    query: str
+
+
+# Inicializar FastAPI y CORS
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/chat")
-async def run_query(query: Query):
-    result = agent.run(query.query)
-    return {"result": result}
+def process_query(query_data: QueryData):
+    try:
+        logging.debug(f"Received query: {query_data.query}")
+        result = agent_executor({"input": query_data.query})
+        return result["output"]
+    except Exception as e:
+        logging.error(f"Error processing query: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
