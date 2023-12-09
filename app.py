@@ -1,93 +1,137 @@
+from pymongo import MongoClient
+from datetime import datetime, timedelta
+import yfinance as yf
+from langchain.agents import AgentType, initialize_agent
+from langchain.chat_models import ChatOpenAI
+from typing import Type
+from langchain.agents.agent_toolkits import create_retriever_tool
 from langchain.vectorstores.chroma import Chroma
 from langchain.embeddings import OpenAIEmbeddings
-from langchain.chat_models import ChatOpenAI
-from langchain.llms.openai import OpenAI
-from langchain.prompts import ChatPromptTemplate
-from langchain.agents.agent_toolkits import create_retriever_tool
-from langchain.agents.agent_toolkits import create_conversational_retrieval_agent
-from dotenv import load_dotenv
-from langchain_experimental.tools import PythonREPLTool
-from langchain_experimental.agents.agent_toolkits import create_python_agent
-from langchain.agents.agent_types import AgentType
-from langchain.agents import Tool
 from langchain.agents import initialize_agent
-from langchain.agents import create_sql_agent
-from langchain.agents.agent_toolkits import SQLDatabaseToolkit
-from langchain.sql_database import SQLDatabase
-
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+from pymongo import MongoClient
+from bson.regex import Regex
+import pandas as pd
+import io
+from langchain.document_loaders import PyPDFLoader
+import requests
+from fastapi import FastAPI
+from typing import Any
+from fastapi.middleware.cors import CORSMiddleware
+from create_database import generate_data_store, load_documents, save_to_chroma, split_text
 
 load_dotenv()
-
+app = FastAPI()
 CHROMA_PATH = "chroma"
 
-PROMPT_TEMPLATE = """
-Answer the question based only on the following context:
-
-{context}
-
----
-
-Answer the question based on the above context: {question}
-"""
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Permite todas las origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Permite todos los métodos
+    allow_headers=["*"],  # Permite todos los headers
+)
 
 
-def main():
-    llm = OpenAI(temperature=0)
-
-    # Prepare the DB.
-    embedding_function = OpenAIEmbeddings()
-    db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
-
-    retriever = db.as_retriever()
-
-    python_repl = create_python_agent(
-        llm=llm,
-        tool=PythonREPLTool(),
-        verbose=True,
-        agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-    )
-
-    retriever_tool = create_retriever_tool(
-        retriever,
-        "Responder_Preguntas",
-        "Para responder preguntas sobre el pdf y csv",
-    )
-
-    db = SQLDatabase.from_uri("sqlite:///Chinook_Sqlite.sqlite")
-    toolkit = SQLDatabaseToolkit(db=db, llm=llm)
-
-    sql_agent = create_sql_agent(
-        llm=ChatOpenAI(temperature=0, model="gpt-4"),
-        toolkit=toolkit,
-        verbose=True,
-        agent_type=AgentType.OPENAI_FUNCTIONS,
-    )
-
-    file_tool = "test"
-    
-    tools = [
-        Tool(
-            name="Python RELP",
-            func=python_repl.run,
-            description="useful for when you need to use python to answer a question. You should input python code",
-        ),
-        Tool(
-            name="Sql Agent",
-            func=sql_agent.run,
-            description="Util para consultar datos en la base de datos",
-        ),
-    ]|
-
-    tools.append(retriever_tool)
-
-    agent = initialize_agent(
-        tools=tools, llm=llm, verbose=True, agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION
-    )
-
-    result = agent.run('Segun el csv de planilla alumnos hazme una tabla con los alumnos con mas faltas')
+class Query(BaseModel):
+    query: str
 
 
-    print(result)
-    
-if __name__ == "__main__":
-    main()
+def query_mongo_atlas(query):
+    """Consulta MongoDB Atlas y devuelve resultados."""
+    client = MongoClient(
+        "mongodb+srv://walterlul:milonga123@gedi-cluster.nxt2obp.mongodb.net/?retryWrites=true&w=majority")
+    db = client.test
+    collection = db["nodes"]
+    results = list(collection.find(query))
+    first_element = results[0]
+    document_name = first_element['path']
+
+    # Handle different file types
+    file = requests.get(
+        f"https://dvcm270k-4000.brs.devtunnels.ms{document_name}")
+
+    if document_name.endswith('.csv'):
+        data = file.content.decode('utf-8')
+        df = pd.read_csv(io.StringIO(data))
+        return df
+    elif document_name.endswith('.pdf'):
+        print("es un archivo csv")
+        print(document_name)
+        loader = PyPDFLoader(
+            f"https://ppmk6krd-4000.brs.devtunnels.ms{document_name}")
+        documents = loader.load()
+        chunk = split_text(documents)
+        print(chunk)
+        save_to_chroma(chunk)
+        
+     
+        # Handle pdf file
+        # This will depend on what you want to do with the pdf files
+        pass
+    else:
+        return "Unsupported file type"
+
+
+# ejemplo
+# nombre_documento = "FUNDAMENTOS seguridad"
+# consulta_regex = Regex(f".*{nombre_documento}.*", 'i')
+# resultado = query_mongo_atlas({"name": consulta_regex})
+
+# print(type(resultado))
+
+# # print(resultado)
+# first_element = resultado[0] # This is a dictionary
+
+# document_id = first_element['id']  # Access the 'id' from the dictionary
+# document_name = first_element['path']  # Access the 'name' from the dictionary
+
+# print(document_name)
+
+# Update the Pydantic model to only include the query
+class MongoQueryInput(BaseModel):
+    """Input for the MongoDB query."""
+    query: dict = Field(
+        description="The query to execute on the 'nodes' collection")
+
+
+# Update the MongoDBQueryTool to match the new function signature
+class MongoDBQueryTool(BaseTool):
+    name = "query_mongo_atlas"
+    description = "Performs queries to the 'nodes' collection in MongoDB Atlas."
+    args_schema: Type[BaseModel] = MongoQueryInput
+
+    def _run(self, query: dict):
+        # As collection name is now hardcoded in the function, it's no longer needed as a parameter
+        return query_mongo_atlas(query)
+
+    def _arun(self, query: dict):
+        raise NotImplementedError("Asynchronous execution not supported")
+
+
+llm = ChatOpenAI(model="gpt-3.5-turbo-0613", temperature=0)
+embedding_function = OpenAIEmbeddings()
+db = Chroma(persist_directory=CHROMA_PATH,
+                    embedding_function=embedding_function)
+
+retriever = db.as_retriever()
+
+retriever_tool = create_retriever_tool(
+            retriever,
+            "Responder_Preguntas",
+            "Para responder preguntas sobre el pdf",
+        )
+
+tools = [MongoDBQueryTool()]
+tools.append(retriever_tool)
+
+agent = initialize_agent(
+    tools, llm, agent=AgentType.OPENAI_FUNCTIONS, verbose=True)
+
+
+@app.post("/chat")
+async def run_query(query: Query):
+    result = agent.run(query.query)
+    return {"result": result}
