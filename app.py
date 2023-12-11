@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import logging
-
+from help import MongoDBQueryTool
 # Importa aquí tus otros módulos y funciones necesarias
 from langchain.vectorstores.chroma import Chroma
 from langchain.embeddings import OpenAIEmbeddings
@@ -55,15 +55,15 @@ python_repl = create_python_agent(
 )
 
 # * SQL Tool
-db = SQLDatabase.from_uri("sqlite:///Chinook_Sqlite.sqlite")
-toolkit = SQLDatabaseToolkit(db=db, llm=llm)
+# db = SQLDatabase.from_uri("sqlite:///Chinook_Sqlite.sqlite")
+# toolkit = SQLDatabaseToolkit(db=db, llm=llm)
 
-sql_agent = create_sql_agent(
-    llm=ChatOpenAI(temperature=0),
-    toolkit=toolkit,
-    verbose=True,
-    agent_type=AgentType.OPENAI_FUNCTIONS,
-)
+# sql_agent = create_sql_agent(
+#     llm=ChatOpenAI(temperature=0),
+#     toolkit=toolkit,
+#     verbose=True,
+#     agent_type=AgentType.OPENAI_FUNCTIONS,
+# )
 
 # * All Tools
 tools = [
@@ -72,14 +72,15 @@ tools = [
         func=python_repl.run,
         description="useful for when you need to use python to answer a question. You should input python code",
     ),
-        Tool(
-        name="Sql_Agent",
-        func=sql_agent.run,
-        description="Util para consultar datos en la base de datos",
-    ),
+    #     Tool(
+    #     name="Sql_Agent",
+    #     func=sql_agent.run,
+    #     description="Util para consultar datos en la base de datos",
+    # ),
 ]
 
 # * Retriever Tool Add
+tools.append(MongoDBQueryTool())
 tools.append(tool_retriever)
 
 llm = ChatOpenAI(temperature=0)
@@ -96,6 +97,7 @@ system_message = SystemMessage(
         "Do your best to answer the questions. "
         "Feel free to use any tools available to look up "
         "relevant information, only if necessary"
+        "If query have .pdf or .csv use MongoDBQueryTool"
     )
 )
 
