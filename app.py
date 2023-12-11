@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import logging
-from mongo_agent import MongoDBQueryTool
+from mongo_agent import agent_mongo, MongoDBQueryTool
 
 # Importa aquí tus otros módulos y funciones necesarias
 from langchain.vectorstores.chroma import Chroma
@@ -17,9 +17,9 @@ from langchain.agents.agent_types import AgentType
 from langchain.agents import Tool
 
 # from langchain.agents import initialize_agent
-# from langchain.agents import create_sql_agent
-# from langchain.agents.agent_toolkits import SQLDatabaseToolkit
-# from langchain.sql_database import SQLDatabase
+from langchain.agents import create_sql_agent
+from langchain.agents.agent_toolkits import SQLDatabaseToolkit
+from langchain.sql_database import SQLDatabase
 from langchain.agents.openai_functions_agent.agent_token_buffer_memory import (
     AgentTokenBufferMemory,
 )
@@ -41,10 +41,10 @@ db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function
 
 retriever = db.as_retriever()
 
-tool_retriever = create_retriever_tool(
+retriever_tool = create_retriever_tool(
     retriever,
-    "search_documents",
-    "Searches and returns documents.",
+    "retriever_tool",
+    "Util para responder preguntas sobre el Instituto Politecnico Formosa (IPF)",
 )
 llm = OpenAI(temperature=0)
 
@@ -57,15 +57,15 @@ python_repl = create_python_agent(
 )
 
 # * SQL Tool
-# db = SQLDatabase.from_uri("sqlite:///Chinook_Sqlite.sqlite")
-# toolkit = SQLDatabaseToolkit(db=db, llm=llm)
+db = SQLDatabase.from_uri("sqlite:///Chinook_Sqlite.sqlite")
+toolkit = SQLDatabaseToolkit(db=db, llm=llm)
 
-# sql_agent = create_sql_agent(
-#     llm=ChatOpenAI(temperature=0),
-#     toolkit=toolkit,
-#     verbose=True,
-#     agent_type=AgentType.OPENAI_FUNCTIONS,
-# )
+sql_agent = create_sql_agent(
+    llm=ChatOpenAI(temperature=0),
+    toolkit=toolkit,
+    verbose=True,
+    agent_type=AgentType.OPENAI_FUNCTIONS,
+)
 
 # * All Tools
 tools = [
@@ -80,14 +80,19 @@ tools = [
         description="Util para responder preguntas sobre imagenes",
     ),
     # Tool(
+    #     name="Sql_Agent",
+    #     func=sql_agent.run,
+    #     description="Util para consultar datos en la base de datos",
+    # ),
+    # Tool(
     #     name="Agent_Mongo",
     #     func=agent_mongo.run,
-    #     description="Util para responder preguntas sobre documentos en mongo",
+    #     description="Util para buscar en mongo",
     # ),
 ]
 
 # * Retriever Tool Add
-tools.append(tool_retriever)
+tools.append(retriever_tool)
 tools.append(MongoDBQueryTool())
 
 llm = ChatOpenAI(temperature=0)
