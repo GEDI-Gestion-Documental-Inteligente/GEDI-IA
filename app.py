@@ -2,7 +2,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import logging
-from help import MongoDBQueryTool
+from mongo_agent import agent_mongo, MongoDBQueryTool
+
 # Importa aquí tus otros módulos y funciones necesarias
 from langchain.vectorstores.chroma import Chroma
 from langchain.embeddings import OpenAIEmbeddings
@@ -27,6 +28,7 @@ from langchain.agents.openai_functions_agent.base import OpenAIFunctionsAgent
 from langchain.prompts import MessagesPlaceholder
 from langchain.schema.messages import SystemMessage
 from langchain.agents.agent_toolkits import create_conversational_retrieval_agent
+from image_agent import agent_vision
 
 load_dotenv()
 
@@ -72,16 +74,21 @@ tools = [
         func=python_repl.run,
         description="useful for when you need to use python to answer a question. You should input python code",
     ),
-    #     Tool(
-    #     name="Sql_Agent",
-    #     func=sql_agent.run,
-    #     description="Util para consultar datos en la base de datos",
+    Tool(
+        name="Agent_Vision",
+        func=agent_vision.run,
+        description="Util para responder preguntas sobre imagenes",
+    ),
+    # Tool(
+    #     name="Agent_Mongo",
+    #     func=agent_mongo.run,
+    #     description="Util para responder preguntas sobre documentos en mongo",
     # ),
 ]
 
 # * Retriever Tool Add
-tools.append(MongoDBQueryTool())
 tools.append(tool_retriever)
+tools.append(MongoDBQueryTool())
 
 llm = ChatOpenAI(temperature=0)
 
@@ -97,7 +104,6 @@ system_message = SystemMessage(
         "Do your best to answer the questions. "
         "Feel free to use any tools available to look up "
         "relevant information, only if necessary"
-        "If query have .pdf or .csv use MongoDBQueryTool"
     )
 )
 
@@ -114,7 +120,7 @@ agent_executor = AgentExecutor(
     memory=memory,
     verbose=True,
     return_intermediate_steps=True,
-    handle_parsing_errors=True
+    handle_parsing_errors=True,
 )
 
 
