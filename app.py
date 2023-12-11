@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import logging
-from mongo_agent import agent_mongo, MongoDBQueryTool
+from mongo_agent import MongoDBQueryTool
 
 # Importa aquí tus otros módulos y funciones necesarias
 from langchain.vectorstores.chroma import Chroma
@@ -17,9 +17,9 @@ from langchain.agents.agent_types import AgentType
 from langchain.agents import Tool
 
 # from langchain.agents import initialize_agent
-from langchain.agents import create_sql_agent
-from langchain.agents.agent_toolkits import SQLDatabaseToolkit
-from langchain.sql_database import SQLDatabase
+# from langchain.agents import create_sql_agent
+# from langchain.agents.agent_toolkits import SQLDatabaseToolkit
+# from langchain.sql_database import SQLDatabase
 from langchain.agents.openai_functions_agent.agent_token_buffer_memory import (
     AgentTokenBufferMemory,
 )
